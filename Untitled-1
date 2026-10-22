@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# Laboratorium Linux: zadania 1-22. Uruchom: bash laboratorium_linux_22_zadania.sh
+# Wszystkie pliki testowe trafiają do osobnego katalogu; nie zmieniamy plików systemowych.
+set -u
+BASE="${HOME}/linux_lab_$(date +%Y%m%d_%H%M%S)_$$"
+mkdir -p "$BASE"
+LOG="$BASE/wyniki.log"
+exec > >(tee -a "$LOG") 2>&1
+cd "$BASE" || exit 1
+section() { printf '\n\n========== ZADANIE %s: %s ==========\n' "$1" "$2"; }
+run() { printf '\n$'; printf ' %q' "$@"; printf '\n'; "$@"; }
+info() { printf '\nINFO: %s\n' "$*"; }
+printf 'Katalog eksperymentów: %s\nLog: %s\n' "$BASE" "$LOG"
+
+section 1 'Czy kolejność operacji chmod ma znaczenie?'
+run touch chmod_test
+run chmod 644 chmod_test
+run chmod u+x,u-x chmod_test
+run ls -l chmod_test
+run chmod u-x,u+x chmod_test
+run ls -l chmod_test
+
+section 2 'Bit x na pliku, który nie jest programem'
+printf 'To nie jest poprawny skrypt ani program\n' > nie_program
+run chmod +x nie_program
+info 'Próba bezpośredniego uruchomienia (oczekiwany błąd formatu / składni):'
+./nie_program || info "Polecenie zakończyło się kodem $? (to oczekiwane)."
+
+section 3 'Powłoki użytkowników w /etc/passwd'
+run cut -d: -f1,7 /etc/passwd
+info 'Wpisy z powłoką inną niż /bin/bash:'
+awk -F: '$7 != "/bin/bash" {print $1 ": " $7}' /etc/passwd
+
+section 4 'Dostęp do /etc/shadow (bez sudo)'
+info 'Nie używamy sudo i nie zapisujemy hashy haseł w logu.'
+if [[ -r /etc/shadow ]]; then
+  info 'Plik /etc/shadow jest czytelny dla tego procesu; jego zawartość celowo pominięto.'
+else
+  info 'Brak uprawnień do odczytu /etc/shadow (zwykle wymaga roota).'
+fi
+run ls -l /etc/shadow
+
+section 5 'Grupy i ich członkowie'
+run cat /etc/group
+info 'Grupy mające co najmniej dwóch członków jawnie wymienionych w polu 4:'
+awk -F: '$4 != "" {n=split($4,a,","); if(n>1) print $1 ": " $4}' /etc/group
+info 'Uwaga: główne członkostwo grupy wynika także z GID w /etc/passwd.'
+
+section 6 'BusyBox jako cp'
+if command -v busybox >/dev/null 2>&1; then
+  BB=$(command -v busybox)
+  run ln -s "$BB" cp
+  run ls -l cp
+  run ./cp --help
+  printf 'Tekst do skopiowania\n' > bb_zrodlo.txt
+  run ./cp bb_zrodlo.txt bb_kopia.txt
+  run cat bb_kopia.txt
+  run busybox --list
+else
+  info 'BusyBox nie jest zainstalowany / nie znajduje się w PATH; pomijam próbę.'
+fi
+
+section 7 'Pętla przez dowiązanie do nadkatalogu'
+run mkdir -p petla_katalog
+run ln -s .. petla_katalog/powrot
+run ls -l petla_katalog/powrot
+info 'Ścieżka petla_katalog/powrot/petla_katalog prowadzi z powrotem do petla_katalog.'
+
+section 8 'Zerwane dowiązanie symboliczne'
+printf 'Oryginał\n' > oryginal.txt
+run ln -s oryginal.txt skrot
+run cat skrot
+run rm oryginal.txt
+run ls -l skrot
+if [[ -L skrot && ! -e skrot ]]; then info 'Dowiązanie nadal istnieje, ale cel już nie: broken symlink.'; fi
+cat skrot || info 'Odczyt się nie udał, zgodnie z oczekiwaniem.'
+
+section 9 'Łańcuch dowiązań'
+printf 'Koniec łańcucha\n' > cel.txt
+run ln -s cel.txt link1
+for n in 2 3 4 5; do prev=$((n-1)); run ln -s "link$prev" "link$n"; done
+run ls -l link1 link2 link3 link4 link5
+run cat link5
+run readlink -f link5
+info 'Po usunięciu link2 łańcuch od link3 do link5 będzie zerwany:'
+run rm link2
+cat link5 || info 'Zerwany łańcuch — oczekiwany błąd.'
+
+section 10 'chmod na dowiązaniu symbolicznym'
+run touch cel_chmod
+run chmod 644 cel_chmod
+run ln -s cel_chmod skrot_chmod
+run ls -l cel_chmod skrot_chmod
+run chmod 600 skrot_chmod
+run ls -l cel_chmod skrot_chmod
+info 'Zmieniono uprawnienia celu, a nie samego dowiązania.'
+
+section 11 'stat w formacie zbliżonym do ls -l'
+run ls -l cel_chmod
+run stat -c '%A %h %U %G %s %y %n' cel_chmod
+
+section 12 'true, false i powłoki w passwd'
+run /bin/true
+info "Kod /bin/true: $?"
+run /bin/false
+info "Kod /bin/false: $?" # run zwraca kod polecenia
+info 'Dokumentacja: man true oraz man false (interaktywnie, poza skryptem).'
+info 'Użytkownicy z powłoką true/false:'
+grep -E '/(true|false)$' /etc/passwd || info 'Nie znaleziono takich użytkowników.'
+
+section 13 'diff: pliki identyczne, małe/duże/całkowite różnice'
+printf 'Ala\nKot\nPies\n' > diff_a
+run cp diff_a diff_b
+run diff diff_a diff_b
+printf 'Ala\nKot\nKrowa\n' > diff_b
+info 'Niewielka różnica:'
+run diff diff_a diff_b
+printf 'Ala\nSamochod\nRower\nAutobus\nDom\n' > diff_b
+info 'Znaczna różnica:'
+run diff diff_a diff_b
+printf 'Jeden\nDwa\nTrzy\nCztery\n' > diff_b
+info 'Całkowicie różne:'
+run diff diff_a diff_b
+info 'Format unified:'
+run diff -u diff_a diff_b
+
+section 14 'Przepełnienie 32-bitowego czasu Unix'
+info 'Signed 32-bit: maksimum 2147483647 sekund od 1970-01-01 UTC.'
+run date -u -d @2147483647 '+%Y-%m-%d %H:%M:%S UTC'
+info 'Kolejna sekunda: 2038-01-19 03:14:08 UTC — poza zakresem signed 32-bit.'
+
+section 15 'Rozpoznawanie C i C++ przez file'
+printf '#include <stdio.h>\nint main(void) { printf("C\\n"); return 0; }\n' > test.c
+printf '#include <iostream>\nint main() { std::cout << "C++" << std::endl; }\n' > test.cpp
+run file test.c test.cpp
+run cp test.cpp test.txt
+run file test.txt
+printf 'int main() { return 0; }\n' > prosty.c
+run cp prosty.c prosty.cpp
+run file prosty.c prosty.cpp
+
+section 16 'Zegarek watch + date'
+info 'Interaktywnie uruchom: watch -n 1 "date +\"%d %B%n%Y%n%H:%M%n%S\""'
+info 'W skrypcie pokazujemy 3 odświeżenia zamiast blokować terminal przez watch.'
+for i in 1 2 3; do date '+%d %B%n%Y%n%H:%M%n%S'; sleep 1; done
+
+section 17 'Data ISO 8601'
+run date +%F
+
+section 18 'Numer tygodnia ISO 8601'
+run date +%V
+info 'Rok tygodniowy ISO:'
+run date +%G
+
+section 19 'Rozmiar pozorny w du'
+printf 'Przykładowy plik\n' > du_plik
+info 'Zwykłe du: zajęte bloki dysku; --apparent-size: logiczny rozmiar danych.'
+run du -h du_plik
+run du -h --apparent-size du_plik
+
+section 20 'du -B512'
+info 'Rozmiar wykorzystanej przestrzeni w jednostkach po 512 bajtów (zaokrąglenie w górę).'
+run du -B512 du_plik
+
+section 21 'Rozmiar katalogu domowego'
+info 'To może potrwać przy dużym katalogu domowym.'
+run du -sh "$HOME"
+
+section 22 'Sygnał po upływie minuty'
+info 'Odliczanie 60 sekund — po nim sygnał terminala i komunikat.'
+sleep 60
+printf '\aMINĘŁA MINUTA!\n'
+printf '\nKONIEC. Wszystkie wyniki zapisano w: %s\n' "$LOG"
